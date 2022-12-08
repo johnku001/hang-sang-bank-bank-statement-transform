@@ -1,0 +1,241 @@
+
+import pandas as pd
+import pdfplumber
+import os
+from datetime import datetime
+import json
+
+TO_BE_PROCESS_FOLDER_PATH = "./pdf_entry/"
+PROCESSED_FOLDER_PATH = "./finished_pdf/"
+OUTPUT_FILE_CSV_PATH = "./csv_result/"
+OUTPUT_FILE_JSON_PATH = ""
+RECORD_TABLE_EXTRACT_SETTING = {
+    "vertical_strategy": "lines", 
+    "horizontal_strategy": "text",
+    "intersection_tolerance": 2,
+    "keep_blank_chars": False,
+    "join_y_tolerance":5,
+}
+ACCOUNT_INFO_EXTRACT_SETTING = {
+    "vertical_strategy": "text", 
+    "horizontal_strategy": "text",
+    "intersection_tolerance": 2,
+    "keep_blank_chars": False,
+    "join_y_tolerance":5,
+}
+
+
+
+class RawRecord:
+    def __init__(self, date: datetime, transaction_details: str, deposit: float, withdrawal: float, balance: float, line_number: int, page_number: int,  file_name: str , release_statement_date: datetime, account_number: str, account_type: str):
+        self.date = date
+        self.transaction_details = transaction_details
+        self.deposit = deposit
+        self.withdrawal = withdrawal
+        self.balance = balance
+        self.line_number = line_number
+        self.page_number = page_number
+        self.file_name = file_name
+        self.release_statement_date = release_statement_date
+        self.account_number = account_number
+        self.account_type = account_type
+        
+class AccountRecord:
+     def __init__(self, statement_date: datetime, account_number: str, account_type: str, account_summary: pd.DataFrame, account_entries: pd.DataFrame, page_number: list[int]):
+        self.statement_date = statement_date
+        self.account_number = account_number
+        self.account_type = account_type
+        self.account_summary = account_summary
+        self.account_entries = account_entries
+        self.page_number = page_number
+
+
+
+class PDFData: 
+    def __init__(self, file_name: str, file_path: str, statement_date: datetime, account_number: str,  account_records:list[AccountRecord],number_of_page: int):
+        self.file_name = file_name
+        self.file_path = file_path
+        self.statement_date = statement_date
+        self.account_number = account_number
+        self.account_records = account_records
+        self.number_of_page = number_of_page
+
+# return account number and statement_date
+def get_account_info(pdf: pdfplumber.PDF): 
+     df = pd.DataFrame(pdf.pages[0].extract_tables(RECORD_TABLE_EXTRACT_SETTING)[0])
+     account_number = df.iloc[1][0].replace("Account Number", "").strip()
+     statement_date = df.iloc[3][0].replace("Statement Date ", "").strip()
+     return account_number, statement_date
+
+def table_to_datatheme(table , statement_year):
+    if "Account Number" in table[1][0]:
+        return None, "info"
+    elif table[0][0] == "DEPOSIT SERVICES":
+        return  to_summary_datatheme(table), "summary"
+    elif table[1][0] == "Date":
+        return to_record_datatheme(table, statement_year), "record"
+    elif table[0][0] == "FINANCIAL POSITION":
+        return None, "financial"
+    else:
+        return None, "undefined"
+
+
+def to_summary_datatheme(table: pdfplumber.PDF):
+    df = pd.DataFrame(table[0:], columns= table[1:])
+    df.columns = df.iloc[0]
+    df = df.drop([0,1,2,3])
+    return df
+
+def to_record_datatheme (table: pdfplumber.table, statement_year: str):
+    df = pd.DataFrame(table[1:], columns= table[1:])
+    try:
+        df.columns = df.iloc[0]
+        df = df.drop([0,1])
+        date = ""
+        removeIndex = []
+        for index, row in df.iterrows():
+            if row["Deposit"] == "" and row["Withdrawal"] == "" and row["Balance"] == "":    
+                  df.loc[index + 1, "Transaction Details"] = df.loc[index, "Transaction Details"] + "\t" + df.loc[index + 1, "Transaction Details"]
+                  removeIndex.append(index)
+            if row["Date"] == "":
+                if row["Transaction Details"] == "Transaction Summary":
+                    df.loc[index, "Date"] = date
+                else:
+                    df.loc[index, "Date"] = date
+            else:
+                date = row["Date"]
+            df.loc[index, "Date"] = date + " " + statement_year
+        df = df.drop(removeIndex)
+    except:
+        pass
+    return df
+
+def get_all_account_records(pdf: pdfplumber.PDF, account_number: str, statement_date: str, ):
+    statement_year = statement_date.split()[2]
+    account_records = list()
+    page_number = list()
+    is_prev_records_end = True
+    tmp_account_entries = None
+    account_entries = pd.DataFrame()
+    account_summary = pd.DataFrame()
+    for page in pdf.pages:
+        tables =  page.extract_tables(RECORD_TABLE_EXTRACT_SETTING)
+
+        for table in tables:
+            df, type = table_to_datatheme(table, statement_year)
+            if type == "summary":
+                account_summary = df
+            elif type == "record":
+                if df["Transaction Details"].str.contains("C/F BALANCE").any() == False:
+                    if tmp_account_entries != None: 
+                        tmp_account_entries = pd.concat([tmp_account_entries, df])
+                    else:
+                        tmp_account_entries = df
+                    is_prev_records_end = False
+                else :
+                    if df["Transaction Details"].str.contains("C/F BALANCE").any() == True and is_prev_records_end == False:
+                        datafield = pd.concat([tmp_account_entries, df])
+                        account_entries = datafield
+                        is_prev_records_end = True
+                        tmp_account_entries = None
+                        page_number.append(page.page_number)
+                    else:
+                        account_entries = df
+                        is_prev_records_end = True
+                        tmp_account_entries = None
+                        page_number.append(page.page_number)
+
+            
+            if not account_entries.empty and not account_summary.empty:
+                account_records.append(AccountRecord(statement_date, account_summary.iloc[0]["Account Number"], account_summary.iloc[0]["DEPOSIT SERVICES"], account_summary, account_entries, page_number))
+                account_entries = pd.DataFrame()
+                account_summary = pd.DataFrame()
+                page_number = list()
+    
+    return account_records
+
+def account_record_to_csv(account_record: AccountRecord):
+    statement_year = account_record.statement_date.split()[2]
+    statement_month = account_record.statement_date.split()[1]
+    account_entries = account_record.account_entries
+    account_entries.to_csv(OUTPUT_FILE_CSV_PATH + account_record.account_type.replace(" ", "_") +  "_" + account_record.account_number + "_" + statement_month + "_" + statement_year +".csv")
+
+
+def account_record_to_raw_records(file_path: str, account_record: AccountRecord):
+    account_entries = account_record.account_entries
+    statement_date = account_record.statement_date
+    raw_records = []
+    file_name = os.path.basename(file_path)
+
+    for index, row in account_entries.iterrows():
+        date = None
+        if row["Date"] == "":
+            date = datetime.strptime(statement_date, '%d %b %Y')
+        else:
+            date = datetime.strptime(row["Date"], '%d %b %Y')
+        raw_records.append(RawRecord(
+            date, 
+            row["Transaction Details"], 
+            row["Deposit"], 
+            row["Withdrawal"], 
+            row["Balance"], 
+            index,
+            account_record.page_number,
+            file_name,
+            account_record.statement_date,
+            account_record.account_number,
+            account_record.account_type 
+            ))
+    return raw_records
+
+def get_pdf_data(file_path: str):
+    pdf = pdfplumber.open(file_path)
+    account_number, statement_date = get_account_info(pdf)
+    account_records = get_all_account_records(pdf, account_number, statement_date)
+    raw_records = []
+
+    for ar in account_records:
+        account_record_to_csv(ar)
+
+    return PDFData( os.path.basename(file_path), file_path,statement_date, account_number,  account_records, len(pdf.pages))
+
+
+def pdf_data_to_csv(pdf_data_list: list[PDFData]):
+    for pdf_data in pdf_data_list:
+            for ar in pdf_data.account_records:
+                account_record_to_csv(ar)
+
+def pdf_data_to_json(pdf_data_list: list[PDFData], file_path: str = ""):
+    raw_records = []
+    for pdf_data in pdf_data_list:
+        for ar in pdf_data.account_records:
+            raw_records.extend(account_record_to_raw_records(file_path, ar))
+
+
+    if file_path != "":
+        with open(file_path, "w") as outfile:
+            for rr in raw_records:
+                json.dump(rr, outfile)
+
+    return raw_records
+
+                
+
+    
+
+def main():
+    dir_list = os.listdir(TO_BE_PROCESS_FOLDER_PATH)
+    pdf_data_list = []
+    for file in dir_list:
+        pdf_data_list.append(get_pdf_data(TO_BE_PROCESS_FOLDER_PATH + file))
+    
+    pdf_data_to_csv(pdf_data_list)
+    pdf_data_to_json(pdf_data_list, "test.json")
+    # pdf_data_to_json(pdf_data_list)
+                         
+  
+main()
+
+
+
+
