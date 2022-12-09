@@ -1,8 +1,6 @@
-
 import pandas as pd
 import pdfplumber
 import os
-from datetime import datetime
 import json
 
 TO_BE_PROCESS_FOLDER_PATH = "./pdf_entry/"
@@ -27,7 +25,7 @@ ACCOUNT_INFO_EXTRACT_SETTING = {
 
 
 class RawRecord:
-    def __init__(self, date: datetime, transaction_details: str, deposit: float, withdrawal: float, balance: float, line_number: int, page_number: int,  file_name: str , release_statement_date: datetime, account_number: str, account_type: str):
+    def __init__(self, date: str, transaction_details: str, deposit: float, withdrawal: float, balance: float, line_number: int, page_number: int,  file_name: str , release_statement_date: str, account_number: str, account_type: str):
         self.date = date
         self.transaction_details = transaction_details
         self.deposit = deposit
@@ -41,7 +39,7 @@ class RawRecord:
         self.account_type = account_type
         
 class AccountRecord:
-     def __init__(self, statement_date: datetime, account_number: str, account_type: str, account_summary: pd.DataFrame, account_entries: pd.DataFrame, page_number: list[int]):
+     def __init__(self, statement_date: str, account_number: str, account_type: str, account_summary: pd.DataFrame, account_entries: pd.DataFrame, page_number: list[int]):
         self.statement_date = statement_date
         self.account_number = account_number
         self.account_type = account_type
@@ -52,7 +50,7 @@ class AccountRecord:
 
 
 class PDFData: 
-    def __init__(self, file_name: str, file_path: str, statement_date: datetime, account_number: str,  account_records:list[AccountRecord],number_of_page: int):
+    def __init__(self, file_name: str, file_path: str, statement_date: str, account_number: str,  account_records:list[AccountRecord],number_of_page: int):
         self.file_name = file_name
         self.file_path = file_path
         self.statement_date = statement_date
@@ -110,7 +108,7 @@ def to_record_datatheme (table: pdfplumber.table, statement_year: str):
         pass
     return df
 
-def get_all_account_records(pdf: pdfplumber.PDF, account_number: str, statement_date: str, ):
+def get_all_account_records(pdf: pdfplumber.PDF, statement_date: str, ):
     statement_year = statement_date.split()[2]
     account_records = list()
     page_number = list()
@@ -170,12 +168,12 @@ def account_record_to_raw_records(file_path: str, account_record: AccountRecord)
     for index, row in account_entries.iterrows():
         date = None
         if row["Date"] == "":
-            date = datetime.strptime(statement_date, '%d %b %Y')
+            date = statement_date
         else:
-            date = datetime.strptime(row["Date"], '%d %b %Y')
-        raw_records.append(RawRecord(
+            date = row["Date"]
+            raw_records.append(RawRecord(
             date, 
-            row["Transaction Details"], 
+            row["Transaction Details"].strip(), 
             row["Deposit"], 
             row["Withdrawal"], 
             row["Balance"], 
@@ -183,21 +181,21 @@ def account_record_to_raw_records(file_path: str, account_record: AccountRecord)
             account_record.page_number,
             file_name,
             account_record.statement_date,
-            account_record.account_number,
-            account_record.account_type 
+            account_record.account_number.strip(),
+            account_record.account_type.strip()
             ))
     return raw_records
 
 def get_pdf_data(file_path: str):
     pdf = pdfplumber.open(file_path)
     account_number, statement_date = get_account_info(pdf)
-    account_records = get_all_account_records(pdf, account_number, statement_date)
+    account_records = get_all_account_records(pdf, statement_date)
     raw_records = []
 
     for ar in account_records:
         account_record_to_csv(ar)
 
-    return PDFData( os.path.basename(file_path), file_path,statement_date, account_number,  account_records, len(pdf.pages))
+    return PDFData(os.path.basename(file_path), file_path,statement_date, account_number,  account_records, len(pdf.pages))
 
 
 def pdf_data_to_csv(pdf_data_list: list[PDFData]):
@@ -209,13 +207,15 @@ def pdf_data_to_json(pdf_data_list: list[PDFData], file_path: str = ""):
     raw_records = []
     for pdf_data in pdf_data_list:
         for ar in pdf_data.account_records:
-            raw_records.extend(account_record_to_raw_records(file_path, ar))
-
+            raw_records = raw_records + account_record_to_raw_records(file_path, ar)
 
     if file_path != "":
-        with open(file_path, "w") as outfile:
-            for rr in raw_records:
-                json.dump(rr, outfile)
+        with open(file_path, "w") as outfile:      
+            json_string = json.dumps([ob.__dict__ for ob in raw_records])
+            outfile.write(json_string)
+           
+
+           
 
     return raw_records
 
