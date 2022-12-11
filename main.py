@@ -1,12 +1,13 @@
 import pandas as pd
 import pdfplumber
+import datetime
 import os
 import json
 
 TO_BE_PROCESS_FOLDER_PATH = "./pdf_entry/"
 PROCESSED_FOLDER_PATH = "./finished_pdf/"
 OUTPUT_FILE_CSV_PATH = "./csv_result/"
-OUTPUT_FILE_JSON_PATH = ""
+OUTPUT_FILE_JSON_PATH = "result.json"
 RECORD_TABLE_EXTRACT_SETTING = {
     "vertical_strategy": "lines", 
     "horizontal_strategy": "text",
@@ -22,11 +23,10 @@ ACCOUNT_INFO_EXTRACT_SETTING = {
     "join_y_tolerance":5,
 }
 
-
-
 class RawRecord:
     def __init__(self, date: str, transaction_details: str, deposit: float, withdrawal: float, balance: float, line_number: int, page_number: int,  file_name: str , release_statement_date: str, account_number: str, account_type: str):
         self.date = date
+        self.transformed_date =  str(datetime.datetime.strptime(date, "%d %b %Y"))
         self.transaction_details = transaction_details
         self.deposit = deposit
         self.withdrawal = withdrawal
@@ -46,8 +46,6 @@ class AccountRecord:
         self.account_summary = account_summary
         self.account_entries = account_entries
         self.page_number = page_number
-
-
 
 class PDFData: 
     def __init__(self, file_name: str, file_path: str, statement_date: str, account_number: str,  account_records:list[AccountRecord],number_of_page: int):
@@ -93,7 +91,7 @@ def to_record_datatheme (table: pdfplumber.table, statement_year: str):
         removeIndex = []
         for index, row in df.iterrows():
             if row["Deposit"] == "" and row["Withdrawal"] == "" and row["Balance"] == "":    
-                  df.loc[index + 1, "Transaction Details"] = df.loc[index, "Transaction Details"] + "\t" + df.loc[index + 1, "Transaction Details"]
+                  df.loc[index + 1, "Transaction Details"] = df.loc[index, "Transaction Details"] + " " + df.loc[index + 1, "Transaction Details"]
                   removeIndex.append(index)
             if row["Date"] == "":
                 if row["Transaction Details"] == "Transaction Summary":
@@ -104,8 +102,8 @@ def to_record_datatheme (table: pdfplumber.table, statement_year: str):
                 date = row["Date"]
             df.loc[index, "Date"] = date + " " + statement_year
         df = df.drop(removeIndex)
-    except:
-        pass
+    except Exception as e:
+        raise Exception("Cannot transform record to datetheme of row " + index + ": " + str(e))
     return df
 
 def get_all_account_records(pdf: pdfplumber.PDF, statement_date: str, ):
@@ -154,9 +152,13 @@ def get_all_account_records(pdf: pdfplumber.PDF, statement_date: str, ):
 
 def account_record_to_csv(account_record: AccountRecord):
     statement_year = account_record.statement_date.split()[2]
-    statement_month = account_record.statement_date.split()[1]
+    statement_month = datetime.datetime.strptime(account_record.statement_date.split()[1], "%b").strftime("%m")
     account_entries = account_record.account_entries
-    account_entries.to_csv(OUTPUT_FILE_CSV_PATH + account_record.account_type.replace(" ", "_") +  "_" + account_record.account_number + "_" + statement_month + "_" + statement_year +".csv")
+    try:
+        account_entries.to_csv(OUTPUT_FILE_CSV_PATH + account_record.account_type.replace(" ", "_") +  "_" + account_record.account_number  + "_" + statement_year + "_" + statement_month+".csv")
+    except Exception as e:
+        raise Exception('Cannot transform account record to csv : ' + str(e))
+        
 
 
 def account_record_to_raw_records(file_path: str, account_record: AccountRecord):
@@ -171,9 +173,9 @@ def account_record_to_raw_records(file_path: str, account_record: AccountRecord)
             date = statement_date
         else:
             date = row["Date"]
-            raw_records.append(RawRecord(
+        raw_records.append(RawRecord(
             date, 
-            row["Transaction Details"].strip(), 
+            ' '.join(row["Transaction Details"].split()), 
             row["Deposit"], 
             row["Withdrawal"], 
             row["Balance"], 
@@ -187,15 +189,16 @@ def account_record_to_raw_records(file_path: str, account_record: AccountRecord)
     return raw_records
 
 def get_pdf_data(file_path: str):
-    pdf = pdfplumber.open(file_path)
-    account_number, statement_date = get_account_info(pdf)
-    account_records = get_all_account_records(pdf, statement_date)
-    raw_records = []
-
-    for ar in account_records:
-        account_record_to_csv(ar)
-
-    return PDFData(os.path.basename(file_path), file_path,statement_date, account_number,  account_records, len(pdf.pages))
+    try:
+        file_name = os.path.basename(file_path)
+        pdf = pdfplumber.open(file_path)
+    except Exception as e:
+        raise Exception("Cannot open file: " + str(e))
+    else:
+        account_number, statement_date = get_account_info(pdf)
+        account_records = get_all_account_records(pdf, statement_date)
+        os.rename(file_path, PROCESSED_FOLDER_PATH + file_name)
+        return PDFData(file_name, file_path,statement_date, account_number,  account_records, len(pdf.pages))
 
 
 def pdf_data_to_csv(pdf_data_list: list[PDFData]):
@@ -205,35 +208,33 @@ def pdf_data_to_csv(pdf_data_list: list[PDFData]):
 
 def pdf_data_to_json(pdf_data_list: list[PDFData], file_path: str = ""):
     raw_records = []
-    for pdf_data in pdf_data_list:
-        for ar in pdf_data.account_records:
-            raw_records = raw_records + account_record_to_raw_records(file_path, ar)
+    try:
+        for pdf_data in pdf_data_list:
+            for ar in pdf_data.account_records:
+                raw_records = raw_records + account_record_to_raw_records(pdf_data.file_name, ar)
+    except Exception as e:
+        raise Exception("Cannot create json file with error: " + str(e))
 
-    if file_path != "":
-        with open(file_path, "w") as outfile:      
-            json_string = json.dumps([ob.__dict__ for ob in raw_records])
-            outfile.write(json_string)
-           
-
-           
-
-    return raw_records
-
-                
-
-    
+    else:
+        if file_path != "":
+            with open(file_path, "w") as outfile:      
+                json_string = json.dumps([ob.__dict__ for ob in raw_records])
+                outfile.write(json_string)  
+        return raw_records
 
 def main():
     dir_list = os.listdir(TO_BE_PROCESS_FOLDER_PATH)
+    dir_list.sort()
     pdf_data_list = []
-    for file in dir_list:
-        pdf_data_list.append(get_pdf_data(TO_BE_PROCESS_FOLDER_PATH + file))
-    
-    pdf_data_to_csv(pdf_data_list)
-    pdf_data_to_json(pdf_data_list, "test.json")
-    # pdf_data_to_json(pdf_data_list)
-                         
-  
+    try:
+        for file in dir_list:
+            if file.endswith(".pdf"):
+                pdf_data_list.append(get_pdf_data(TO_BE_PROCESS_FOLDER_PATH + file))
+        pdf_data_to_csv(pdf_data_list)
+        pdf_data_to_json(pdf_data_list, OUTPUT_FILE_JSON_PATH)                     
+    except Exception as e:
+        print("Cannot transform err: " + str(e))
+        
 main()
 
 
