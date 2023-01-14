@@ -3,9 +3,11 @@ COPY app.py /src
 RUN mkdir -p /csv_result
 RUN mkdir -p /pdf_entry
 RUN mkdir -p /finished_pdf
-Run apt-get -y update
-Run pip install pandas==1.5.2
-Run pip install pdfplumber==0.7.6
+RUN apt-get -y update
+RUN pip install pandas==1.5.2
+RUN pip install pdfplumber==0.7.6
 
-CMD ["/usr/local/bin/python" ,"app.py" ,"--config", "/etc/config/config.json"]
+
+ENTRYPOINT [ "/bin/bash", "-l", "-c" ]
+CMD ["python3" ,"app.py"]
 
