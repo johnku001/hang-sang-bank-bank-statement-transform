@@ -148,18 +148,7 @@ def get_all_account_records(pdf: pdfplumber.PDF, statement_date: str, ):
                 account_summary = pd.DataFrame()
                 page_number = list()
     
-    return account_records
-
-def account_record_to_csv(account_record: AccountRecord):
-    statement_year = account_record.statement_date.split()[2]
-    statement_month = datetime.datetime.strptime(account_record.statement_date.split()[1], "%b").strftime("%m")
-    account_entries = account_record.account_entries
-    try:
-        account_entries.to_csv(OUTPUT_FILE_CSV_PATH + account_record.account_type.replace(" ", "_") +  "_" + account_record.account_number  + "_" + statement_year + "_" + statement_month+".csv")
-    except Exception as e:
-        raise Exception('Cannot transform account record to csv : ' + str(e))
-        
-
+    return account_records       
 
 def account_record_to_raw_records(file_path: str, account_record: AccountRecord):
     account_entries = account_record.account_entries
@@ -201,13 +190,28 @@ def get_pdf_data(file_path: str):
         return PDFData(file_name, file_path,statement_date, account_number,  account_records, len(pdf.pages))
 
 
+def account_record_to_csv(account_record: AccountRecord):
+    statement_year = account_record.statement_date.split()[2]
+    statement_month = datetime.datetime.strptime(account_record.statement_date.split()[1], "%b").strftime("%m")
+    account_entries = account_record.account_entries
+    try:
+        filename = OUTPUT_FILE_CSV_PATH + account_record.account_type.replace(" ", "_") +  "_" + account_record.account_number  + "_" + statement_year + "_" + statement_month+".csv"
+        account_entries.to_csv(filename)
+        return filename
+    except Exception as e:
+        raise Exception('Cannot transform account record to csv : ' + str(e))
+
 def pdf_data_to_csv(pdf_data_list: list[PDFData]):
+    return_file_names = []
     for pdf_data in pdf_data_list:
             for ar in pdf_data.account_records:
-                account_record_to_csv(ar)
+                filename = account_record_to_csv(ar)
+                return_file_names.append(os.path.basename(filename))
+    return return_file_names
 
 def pdf_data_to_json(pdf_data_list: list[PDFData], file_path: str = ""):
     raw_records = []
+    return_file_name = os.path.basename(file_path)
     try:
         for pdf_data in pdf_data_list:
             for ar in pdf_data.account_records:
@@ -220,9 +224,10 @@ def pdf_data_to_json(pdf_data_list: list[PDFData], file_path: str = ""):
             with open(file_path, "w") as outfile:      
                 json_string = json.dumps([ob.__dict__ for ob in raw_records])
                 outfile.write(json_string)  
-        return raw_records
+        return return_file_name
 
 def main():
+    print ('The program is now start....... \n')
     dir_list = os.listdir(TO_BE_PROCESS_FOLDER_PATH)
     dir_list.sort()
     pdf_data_list = []
@@ -230,8 +235,18 @@ def main():
         for file in dir_list:
             if file.endswith(".pdf"):
                 pdf_data_list.append(get_pdf_data(TO_BE_PROCESS_FOLDER_PATH + file))
-        pdf_data_to_csv(pdf_data_list)
-        pdf_data_to_json(pdf_data_list, OUTPUT_FILE_JSON_PATH)                     
+        csv_files_name = pdf_data_to_csv(pdf_data_list)
+        json_file_names = pdf_data_to_json(pdf_data_list, OUTPUT_FILE_JSON_PATH)   
+        print("Output csv files: ")
+        print(csv_files_name)
+        print("\n")
+
+        print("Output json files: ")
+        print(json_file_names)
+        print("\n")
+
+        print ('The program is  end!')
+
     except Exception as e:
         print("Cannot transform err: " + str(e))
         
