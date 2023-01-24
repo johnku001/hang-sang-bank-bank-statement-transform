@@ -230,6 +230,10 @@ def main():
     print ('The program is now start....... \n')
     dir_list = os.listdir(TO_BE_PROCESS_FOLDER_PATH)
     dir_list.sort()
+    print("The file will be processed:")
+    print(dir_list)
+    print("\n")
+
     pdf_data_list = []
     try:
         for file in dir_list:

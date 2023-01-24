@@ -14,7 +14,7 @@ Used Library Version
 
 Create docker image (Recommanded)
 ```console
-$ docker build -t bsparser .
+$ docker build -t bs-parser .
 ```
 
 Run in local
@@ -29,7 +29,7 @@ $ pip install pdfplumber==0.7.6
 
 Docker
 ```console
-$ docker run --rm -it -v "$(pwd):/src" -w /src  bs-parser
+$ docker run --rm -it -v `pwd`:/src -w /src bs-parser 
 ```
 
 Local
