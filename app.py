@@ -63,13 +63,13 @@ def get_account_info(pdf: pdfplumber.PDF):
      statement_date = df.iloc[3][0].replace("Statement Date ", "").strip()
      return account_number, statement_date
 
-def table_to_datatheme(table , statement_year):
+def table_to_datatheme(table , statement_year, statement_month):
     if "Account Number" in table[1][0]:
         return None, "info"
     elif table[0][0] == "DEPOSIT SERVICES":
         return  to_summary_datatheme(table), "summary"
     elif table[1][0] == "Date":
-        return to_record_datatheme(table, statement_year), "record"
+        return to_record_datatheme(table, statement_year, statement_month), "record"
     elif table[0][0] == "FINANCIAL POSITION":
         return None, "financial"
     else:
@@ -82,7 +82,7 @@ def to_summary_datatheme(table: pdfplumber.PDF):
     df = df.drop([0,1,2,3])
     return df
 
-def to_record_datatheme (table: pdfplumber.table, statement_year: str):
+def to_record_datatheme (table: pdfplumber.table, statement_year: str, statement_month:str):
     df = pd.DataFrame(table[1:], columns= table[1:])
     try:
         df.columns = df.iloc[0]
@@ -94,20 +94,22 @@ def to_record_datatheme (table: pdfplumber.table, statement_year: str):
                   df.loc[index + 1, "Transaction Details"] = df.loc[index, "Transaction Details"] + " " + df.loc[index + 1, "Transaction Details"]
                   removeIndex.append(index)
             if row["Date"] == "":
-                if row["Transaction Details"] == "Transaction Summary":
-                    df.loc[index, "Date"] = date
-                else:
-                    df.loc[index, "Date"] = date
+                df.loc[index, "Date"] = date
             else:
                 date = row["Date"]
-            df.loc[index, "Date"] = date + " " + statement_year
+            if "Dec" in date and "Jan" in statement_month :
+                df.loc[index, "Date"] = date + " " + str(int(statement_year)-1)
+            else:
+                df.loc[index, "Date"] = date + " " + statement_year
+
         df = df.drop(removeIndex)
     except Exception as e:
         raise Exception("Cannot transform record to datetheme of row " + index + ": " + str(e))
     return df
 
-def get_all_account_records(pdf: pdfplumber.PDF, statement_date: str, ):
+def get_all_account_records(pdf: pdfplumber.PDF, statement_date: str):
     statement_year = statement_date.split()[2]
+    statement_month = statement_date.split()[1]
     account_records = list()
     page_number = list()
     is_prev_records_end = True
@@ -118,7 +120,7 @@ def get_all_account_records(pdf: pdfplumber.PDF, statement_date: str, ):
         tables =  page.extract_tables(RECORD_TABLE_EXTRACT_SETTING)
 
         for table in tables:
-            df, type = table_to_datatheme(table, statement_year)
+            df, type = table_to_datatheme(table, statement_year, statement_month)
             if type == "summary":
                 account_summary = df
             elif type == "record":
